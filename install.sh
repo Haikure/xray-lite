@@ -1,46 +1,66 @@
-#!/usr/bin/env bash
-set -Eeuo pipefail
+#!/bin/sh
+# Standalone POSIX bootstrap: also runs on Alpine before Bash is installed.
+set -eu
 umask 077
-XL_APP=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-source "$XL_APP/lib/common.sh"
-for module in environment service certificate release state nodes export relay forward argo menu; do source "$XL_APP/lib/$module.sh"; done
-xl_root
-if [[ ${1:-} == --deps ]]; then
-    if command -v apt-get >/dev/null; then apt-get update; apt-get install -y --no-install-recommends bash jq curl ca-certificates openssl unzip util-linux coreutils tar
-    elif command -v apk >/dev/null; then apk add --no-cache bash jq curl ca-certificates openssl unzip util-linux coreutils tar
-    else xl_die '请安装 Bash、jq、curl、系统 CA、OpenSSL、unzip、flock、timeout、tar。'; fi
-    exit
-fi
-xl_need bash jq curl openssl unzip sha256sum flock timeout tar
-xl_path_check
-xl_install_local() (
-mkdir -p "$(dirname "$XL_LINK")"
-if [[ -e $XL_LINK && $(readlink -f "$XL_LINK") != "$XL_HOME/app/xl" ]]; then xl_die "快捷命令 $XL_LINK 已被其他程序占用。"; fi
-stage=$(mktemp -d "$XL_HOME/install.XXXXXXXX")
-app_replaced=0; completed=0
-xl_install_cleanup() {
-    local rc=$?
-    trap - EXIT
-    if (( completed==0 && app_replaced==1 )) && [[ -d $XL_HOME/app.previous ]]; then rm -rf -- "$XL_HOME/app"; mv "$XL_HOME/app.previous" "$XL_HOME/app"; fi
-    rm -rf -- "$stage"
-    exit "$rc"
+XL_REPO=${XL_REPO:-Haikure/xray-lite}
+XL_REF=${XL_REF:-main}
+export XL_REPO
+die() { printf '错误：%s\n' "$*" >&2; exit 1; }
+case ${1-} in
+    --help|-h)
+        printf '%s\n' '用法：sh install.sh [--no-menu] [--no-start] [--offline release.json core.zip]'
+        printf '%s\n' '自动准备依赖并安装官方最新 Xray，交互终端安装完成后打开 xl 菜单。'
+        exit 0;;
+esac
+[ "$(id -u)" -eq 0 ] || die '请在 VPS 或已有容器内使用 root 运行。'
+
+prepare_dependencies() {
+    missing=0
+    for tool in bash jq curl openssl unzip flock timeout sha256sum tar mktemp readlink; do
+        command -v "$tool" >/dev/null 2>&1 || missing=1
+    done
+    [ -s /etc/ssl/certs/ca-certificates.crt ] || [ -s /etc/ssl/cert.pem ] || missing=1
+    [ "$missing" -ne 0 ] || return 0
+    printf '正在安装 xray-lite 所需依赖…\n' >&2
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bash jq curl ca-certificates openssl unzip util-linux coreutils tar
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache bash jq curl ca-certificates openssl unzip util-linux coreutils tar
+    else
+        die '请安装 Bash、jq、curl、CA 证书、OpenSSL、unzip、flock、timeout、coreutils 和 tar。'
+    fi
 }
-trap xl_install_cleanup EXIT
-mkdir "$stage/app"
-cp -a "$XL_APP/xl" "$XL_APP/install.sh" "$XL_APP/lib" "$XL_APP/VERSION" "$XL_APP/README.md" "$stage/app/"
-chmod 755 "$stage/app/xl" "$stage/app/install.sh"
-for file in "$stage/app/xl" "$stage/app/install.sh" "$stage/app/"lib/*.sh; do bash -n "$file"; done
-if [[ -d $XL_HOME/app ]]; then
-    [[ ! -e $XL_HOME/app.previous ]] || rm -rf -- "$XL_HOME/app.previous"
-    mv "$XL_HOME/app" "$XL_HOME/app.previous"
+
+case ${1-} in --deps) prepare_dependencies; exit 0;; esac
+no_menu=0
+if [ "${1-}" = --no-menu ]; then no_menu=1; shift; fi
+# Offline installation must not cause package or repository requests.
+offline=0
+for argument in "$@"; do [ "$argument" != --offline ] || offline=1; done
+if [ "$offline" -eq 0 ]; then prepare_dependencies; fi
+
+source_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+download_dir=''
+trap 'if [ -n "$download_dir" ]; then rm -rf -- "$download_dir"; fi' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [ ! -f "$source_dir/install-local.sh" ] || [ ! -f "$source_dir/lib/common.sh" ]; then
+    [ "$offline" -eq 0 ] || die '离线安装需先下载完整仓库。'
+    case $XL_REPO in *[!A-Za-z0-9_./-]*|*/../*|../*|/*) die '仓库名称无效。';; esac
+    case $XL_REF in ''|*[!A-Za-z0-9_.-]*|..*) die '分支或标签名称无效。';; esac
+    download_dir=$(mktemp -d)
+    printf '正在下载 %s (%s)…\n' "$XL_REPO" "$XL_REF" >&2
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 300 --retry 2 \
+        --silent --show-error "https://codeload.github.com/$XL_REPO/tar.gz/$XL_REF" -o "$download_dir/source.tar.gz"
+    tar -tzf "$download_dir/source.tar.gz" | awk '/^\// || /(^|\/)\.\.($|\/)/ {bad=1} END {exit bad}' || die '下载的归档路径无效。'
+    tar -tvzf "$download_dir/source.tar.gz" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit bad}' || die '下载的归档包含不支持的文件类型。'
+    mkdir "$download_dir/source"
+    tar -xzf "$download_dir/source.tar.gz" --strip-components=1 --no-same-owner -C "$download_dir/source"
+    source_dir="$download_dir/source"
+    [ -f "$source_dir/install-local.sh" ] && [ -f "$source_dir/lib/common.sh" ] && [ -f "$source_dir/xl" ] || die '下载的仓库文件不完整。'
 fi
-if ! mv "$stage/app" "$XL_HOME/app"; then [[ ! -d $XL_HOME/app.previous ]] || mv "$XL_HOME/app.previous" "$XL_HOME/app"; xl_die '安装脚本失败。'; fi
-app_replaced=1
-ln -sfn "$XL_HOME/app/xl" "$XL_LINK"
-export XL_HOME XL_STATE XL_RUN XL_LINK XL_SERVICE_MODE
-XL_APP="$XL_HOME/app"
-xl_bootstrap "$@"
-completed=1
-printf '安装完成。运行 xl 打开中文菜单。\n'
-)
-xl_lock xl_install_local "$@"
+bash "$source_dir/install-local.sh" "$@"
+if [ "$no_menu" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+    bash "${XL_HOME:-/opt/xray-lite}/app/xl" menu
+fi

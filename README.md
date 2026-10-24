@@ -4,20 +4,57 @@
 
 ## 安装
 
-从项目目录运行（Alpine 先 `apk add bash`）：
+在 VPS 或已有容器内以 **root** 执行一键安装（需要系统已有 `curl` 或 `wget`）：
 
 ```sh
-bash install.sh --deps
-bash install.sh
+sh -c 'f=$(mktemp) || exit 1; trap '\''rm -f "$f"'\'' EXIT; (curl -fsSL https://raw.githubusercontent.com/Haikure/xray-lite/main/install.sh -o "$f" || wget -qO "$f" https://raw.githubusercontent.com/Haikure/xray-lite/main/install.sh) && sh "$f"'
+```
+
+入口会下载 `Haikure/xray-lite` 的 `main` 分支，自动准备 Bash、jq 等依赖，再下载并验证官方最新 Xray。Alpine 不需要先手动安装 Bash。交互终端中安装成功后自动打开中文管理菜单，之后直接输入 `xl` 即可再次进入。非交互执行不自动打开菜单。可在 `sh install.sh` 后加 `--no-menu` 禁止自动进入菜单。
+
+从已经下载的完整项目目录安装：
+
+```sh
+sh install.sh
 xl
 ```
+
+## 终端交互菜单
+
+提供类似参考项目的中文数字菜单，输入编号并回车操作：
+
+```text
+════════════════════════════════════════════════
+  xray-lite v0.1.0 · 官方 Xray-core
+  Haikure/xray-lite
+  服务：运行中  节点：3  模式：systemd
+════════════════════════════════════════════════
+  节点管理
+   1 添加节点       2 Argo 隧道       3 查看节点
+   4 删除节点       5 修改节点      20 批量创建
+  服务管理
+   6 重启服务       7 停止服务       8 运行状态
+   9 实时日志      10 定时重启      22 启动服务
+  配置与维护
+  11 DNS/时间诊断  12 配置检查      13 脚本更新
+  14 DNS 设置      15 核心更新      16 NAT 设置
+  17 卸载          23 回滚
+  进阶功能
+  18 中转/导入     19 端口转发      21 批量 YAML
+
+   0 退出
+```
+
+这是 Bash 文本交互界面，通过数字菜单和逐项提示管理，未使用鼠标或方向键选单。添加、修改节点、证书、DNS、NAT、端口转发和 Argo 无需手写 JSON；高级批量配置及文件导入保留 JSON 入口。密码输入隐藏，常用修改只更新当前所选字段。
+
+## 核心安装策略
 
 下载直接访问官方 Release API 的完整分页列表，按 `published_at` 选择最新非草稿项，包括预发布，无预发布确认。不使用 `/releases/latest`。最新发布缺少架构资产或 SHA-256 摘要即失败，不降级。检查摘要、实际版本和当前配置后替换，应用失败回滚。
 
 离线安装接受**事先从官方取得的**单个 Release JSON 和该发布的原始 zip，并执行同样的摘要与版本检查：
 
 ```sh
-bash install.sh --offline official-release.json Xray-linux-64.zip --no-start
+sh install.sh --no-menu --offline official-release.json Xray-linux-64.zip --no-start
 ```
 
 默认目录与其他 Xray 安装隔离：程序 `/opt/xray-lite/app`，状态 `/var/lib/xray-lite`，PID `/run/xray-lite`，服务 `xray-lite`。可通过 `XL_HOME`、`XL_STATE`、`XL_RUN`、`XL_LINK` 指定绝对路径；安装和后续调用需保持一致。`XL_SERVICE_MODE=auto|systemd|openrc|direct`。配置及私钥目录权限 700，文件 600。
@@ -124,11 +161,11 @@ VLESS-WS/Trojan-WS 可以使用临时或固定隧道。按官方 cloudflared Rel
 ```sh
 xl core update
 xl rollback
-xl script update owner/repo
+xl script update
 xl uninstall --yes
 ```
 
-所有修改共用 flock；代际目录保存配置、元数据和核心引用，通过单个 `current` 符号链接切换；配置检查失败不切换，启动/规则应用失败恢复上一份。`previous` 保存上次成功修改之前的状态。脚本更新要求发布提供 `xray-lite.tar.gz` 和 GitHub SHA-256 digest，包根目录包含 `xl`、`lib/`、`install.sh`、`VERSION`。脚本包属于可执行代码，更新源应为自己信任的本项目发布仓库。
+所有修改共用 flock；代际目录保存配置、元数据和核心引用，通过单个 `current` 符号链接切换；配置检查失败不切换，启动/规则应用失败恢复上一份。`previous` 保存上次成功修改之前的状态。脚本更新默认使用 `Haikure/xray-lite` 的 Release，菜单 13 直接更新；也可显式指定 `xl script update owner/repo`。发布需提供 `xray-lite.tar.gz` 和 GitHub SHA-256 digest，包根目录包含 `xl`、`lib/`、`install.sh`、`install-local.sh`、`VERSION`。一键安装使用仓库分支源码，无需先创建 Release。脚本包属于可执行代码，更新源应为自己信任的本项目发布仓库。
 
 ## 功能差异与验收
 

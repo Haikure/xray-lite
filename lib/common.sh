@@ -5,7 +5,8 @@
 : "${XL_RUN:=/run/xray-lite}"
 : "${XL_LINK:=/usr/local/bin/xl}"
 : "${XL_SERVICE_MODE:=auto}"
-export XL_HOME XL_STATE XL_RUN XL_LINK XL_SERVICE_MODE
+: "${XL_REPO:=Haikure/xray-lite}"
+export XL_HOME XL_STATE XL_RUN XL_LINK XL_SERVICE_MODE XL_REPO
 
 xl_die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 xl_note() { printf '%s\n' "$*" >&2; }

@@ -51,7 +51,7 @@ xl_core_edit() {
     xl_note "已校验官方核心 $tag。"
 }
 xl_script_update() {
-    local repository=$1 stage asset tag old
+    local repository=${1:-$XL_REPO} stage asset tag old
     [[ $repository =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || xl_die '参数为 GitHub owner/repo。'
     stage=$(mktemp -d "$XL_HOME/script-update.XXXXXXXX")
     xl_release_fetch "$repository" "$stage/release.json"
@@ -63,8 +63,9 @@ xl_script_update() {
     mkdir "$stage/app"; tar -xzf "$stage/app.tar.gz" --no-same-owner -C "$stage/app"
     [[ -f $stage/app/xl && -d $stage/app/lib && -f $stage/app/VERSION ]] || xl_die '脚本归档结构无效。'
     local script
-    for script in "$stage/app/xl" "$stage/app/install.sh" "$stage/app/"lib/*.sh; do bash -n "$script"; done
-    chmod 755 "$stage/app/xl" "$stage/app/install.sh"
+    sh -n "$stage/app/install.sh"
+    for script in "$stage/app/xl" "$stage/app/install-local.sh" "$stage/app/"lib/*.sh; do bash -n "$script"; done
+    chmod 755 "$stage/app/xl" "$stage/app/install.sh" "$stage/app/install-local.sh"
     [[ $(bash "$stage/app/xl" version) == "$(cat "$stage/app/VERSION")" ]] || xl_die '候选脚本自检失败。'
     [[ ! -e $XL_HOME/app.previous ]] || rm -rf -- "$XL_HOME/app.previous"
     old="$XL_HOME/app.previous"; mv "$XL_HOME/app" "$old"

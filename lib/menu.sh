@@ -18,7 +18,7 @@ xl schedule MINUTES | tick              定时重启（0 关闭）/ 定时器入
 xl config show | apply config.json      查看 / 检查并应用完整配置
 xl dns dns.json                        修改 Xray DNS（对象格式）
 xl core update | rollback              官方最新核心（含预发布）/ 恢复前一版本
-xl script update owner/repo             校验 Release 资产后更新脚本
+xl script update [owner/repo]           更新脚本，默认 Haikure/xray-lite
 xl relay import ID outbound.json        导入 Xray 出口对象
 xl relay link ID link.txt               导入第三方分享链接
 xl relay token-export NODE passfile     输出项目加密 Token
@@ -86,9 +86,13 @@ xl_uninstall() {
     rm -rf -- "$XL_STATE" "$XL_RUN" "$XL_HOME"
     xl_note 'xray-lite 已卸载。'
 }
-xl_prompt() { local label=$1 name=$2 fallback=${3:-}; read -r -p "$label${fallback:+ [$fallback]}：" "$name"; [[ -n ${!name} ]] || printf -v "$name" '%s' "$fallback"; }
+xl_prompt() {
+    local _prompt_label=$1 _prompt_target=$2 _prompt_default=${3:-}
+    IFS= read -r -p "$_prompt_label${_prompt_default:+ [$_prompt_default]}：" "$_prompt_target" || return 1
+    [[ -n ${!_prompt_target} ]] || printf -v "$_prompt_target" '%s' "$_prompt_default"
+}
 xl_node_interactive() {
-    local choice protocol transport security name address port sni spec
+    local choice protocol transport security name address port sni spec value public_port cert key
     cat <<'EOF'
 1 VLESS TCP Reality Vision     2 VLESS TCP TLS Vision
 3 VLESS WS TLS                4 VLESS gRPC TLS
@@ -100,7 +104,7 @@ xl_node_interactive() {
 15 Shadowsocks               16 SOCKS5
 17 纯 VLESS TCP（由当前核心检查限制）
 EOF
-    xl_prompt 选择 choice 1
+    xl_prompt 选择 choice 1 || return 0
     case $choice in
         1) protocol=vless; transport=tcp; security=reality;; 2) protocol=vless; transport=tcp; security=tls;;
         3) protocol=vless; transport=ws; security=tls;; 4) protocol=vless; transport=grpc; security=tls;;
@@ -111,40 +115,64 @@ EOF
         13) protocol=trojan; transport=xhttp; security=reality;; 14) protocol=hysteria; transport=hysteria; security=tls;;
         15) protocol=shadowsocks; transport=tcp; security=none;; 16) protocol=socks; transport=tcp; security=none;;
         17) protocol=vless; transport=tcp; security=none;; *) xl_note '选择无效'; return 1;; esac
-    xl_prompt 名称 name "$protocol-$transport"
-    xl_prompt 公网IP或域名 address
-    xl_prompt 容器监听端口 port 10001
-    xl_prompt SNI sni "${address:-www.microsoft.com}"
+    xl_prompt 名称 name "$protocol-$transport" || return 0
+    xl_prompt 公网IP或域名 address || return 0
+    xl_prompt 监听端口 port 10001 || return 0
+    if [[ $security == reality ]]; then xl_prompt SNI sni www.microsoft.com || return 0
+    elif [[ $security == tls ]]; then xl_prompt SNI sni "${address:-example.com}" || return 0
+    else sni=''; fi
     spec=$(jq -cn --arg protocol "$protocol" --arg transport "$transport" --arg security "$security" --arg name "$name" --arg public_address "$address" --arg port "$port" --arg sni "$sni" '{protocol:$protocol,transport:$transport,security:$security,name:$name,public_address:$public_address,port:$port,sni:$sni}')
-    bash "$XL_APP/xl" node add --file <(printf '%s\n' "$spec")
+    if [[ -z $sni ]]; then spec=$(jq 'del(.sni)' <<< "$spec"); fi
+    xl_prompt '公网端口（NAT 模式按映射表）' public_port "$port" || return 0
+    if [[ $public_port != "$port" ]]; then spec=$(jq --arg value "$public_port" '.public_port=$value' <<< "$spec"); fi
+    if [[ $protocol == vless ]]; then
+        xl_prompt 'UUID（留空自动生成）' value || return 0
+        [[ -z $value ]] || spec=$(jq --arg value "$value" '.uuid=$value' <<< "$spec")
+    else
+        xl_prompt_secret '密码（留空自动生成）' value || return 0
+        [[ -z $value ]] || spec=$(jq --arg value "$value" '.password=$value' <<< "$spec")
+    fi
+    case $transport in
+        ws|xhttp) xl_prompt 传输路径 value /xl || return 0; spec=$(jq --arg value "$value" '.path=$value' <<< "$spec");;
+        grpc) xl_prompt gRPC服务名 value xl || return 0; spec=$(jq --arg value "$value" '.service_name=$value' <<< "$spec");;
+    esac
+    if [[ $security == tls ]]; then
+        xl_prompt '证书链绝对路径（留空自动生成自签）' cert || return 0
+        if [[ -n $cert ]]; then xl_prompt 私钥绝对路径 key || return 0; spec=$(jq --arg cert "$cert" --arg key "$key" '.certificate=$cert|.key_file=$key' <<< "$spec"); fi
+    fi
+    case $protocol in
+        shadowsocks)
+            printf '%s\n' '经典 AEAD：aes-128-gcm / aes-256-gcm / chacha20-ietf-poly1305 / xchacha20-ietf-poly1305' 'SS2022：2022-blake3-aes-128-gcm / 2022-blake3-aes-256-gcm / 2022-blake3-chacha20-poly1305'
+            xl_prompt 算法 value 2022-blake3-aes-128-gcm || return 0; spec=$(jq --arg value "$value" '.cipher=$value' <<< "$spec");;
+        socks)
+            xl_prompt 用户名 value xl || return 0; spec=$(jq --arg value "$value" '.username=$value' <<< "$spec")
+            xl_prompt '启用 UDP true/false' value false || return 0; spec=$(jq --arg value "$value" '.udp=$value' <<< "$spec");;
+        hysteria)
+            xl_prompt '上传带宽 Mbps（留空默认）' value || return 0; [[ -z $value ]] || spec=$(jq --arg value "$value" '.up=$value' <<< "$spec")
+            xl_prompt '下载带宽 Mbps（留空默认）' value || return 0; [[ -z $value ]] || spec=$(jq --arg value "$value" '.down=$value' <<< "$spec")
+            xl_prompt_secret 'Salamander 密码（留空不启用）' value || return 0; [[ -z $value ]] || spec=$(jq --arg value "$value" '.obfs_password=$value' <<< "$spec")
+            xl_prompt '跳跃监听端口范围（留空不启用）' value || return 0; [[ -z $value ]] || spec=$(jq --arg value "$value" '.hop_ports=$value' <<< "$spec");;
+    esac
+    xl_menu_file_command "$spec" node add
 }
 xl_menu() {
     local choice id file action
     while :; do
-        cat <<'EOF'
-
-xray-lite · 官方 Xray-core
-1 添加节点     2 Argo 隧道     3 查看节点     4 删除节点
-5 修改节点     6 重启服务     7 停止服务     8 运行状态
-9 实时日志    10 定时重启    11 DNS/时间诊断 12 配置检查
-13 脚本更新   14 DNS 设置    15 核心更新    16 NAT 设置
-17 卸载       18 中转/导入   19 端口转发    20 批量创建
-21 批量 YAML  22 启动服务    23 回滚        0 退出
-EOF
+        xl_menu_header
         read -r -p '请选择：' choice || return 0
         case $choice in
             0) return;; 1) (xl_node_interactive) || true;;
-            2) xl_prompt '操作 install/add/delete/list' action list; case $action in install|list) bash "$XL_APP/xl" argo "$action" || true;; add) xl_prompt 节点ID id; xl_prompt 隧道JSON文件 file; bash "$XL_APP/xl" argo add "$id" --file "$file" || true;; delete) xl_prompt 节点ID id; bash "$XL_APP/xl" argo delete "$id" || true;; esac;;
-            3|4|5) xl_read xl_node_list; xl_prompt 节点ID id; case $choice in 3) bash "$XL_APP/xl" node show "$id" || true;; 4) bash "$XL_APP/xl" node delete "$id" || true;; 5) xl_prompt 修改JSON文件 file; bash "$XL_APP/xl" node set "$id" --file "$file" || true;; esac;;
+            2) (xl_argo_interactive) || true;;
+            3|4|5) xl_pick_node id || continue; case $choice in 3) bash "$XL_APP/xl" node show "$id" || true;; 4) bash "$XL_APP/xl" node delete "$id" || true;; 5) (xl_node_edit_interactive "$id") || true;; esac;;
             6) bash "$XL_APP/xl" restart || true;; 7) bash "$XL_APP/xl" stop || true;; 8) bash "$XL_APP/xl" status || true;; 9) bash "$XL_APP/xl" logs || true;;
             10) xl_prompt '间隔分钟，0关闭' id 0; bash "$XL_APP/xl" schedule "$id" || true;;
             11) bash "$XL_APP/xl" diagnose || true;; 12) bash "$XL_APP/xl" check || true;;
-            13) xl_prompt 'GitHub owner/repo' id; bash "$XL_APP/xl" script update "$id" || true;;
-            14) xl_prompt DNS配置JSON文件 file; bash "$XL_APP/xl" dns "$file" || true;;
-            15) bash "$XL_APP/xl" core update || true;; 16) xl_prompt NAT配置JSON文件 file; bash "$XL_APP/xl" nat set "$file" || true;;
+            13) bash "$XL_APP/xl" script update || true;;
+            14) (xl_dns_interactive) || true;;
+            15) bash "$XL_APP/xl" core update || true;; 16) (xl_nat_interactive) || true;;
             17) xl_prompt '输入 DELETE 删除本项目所有数据' id; [[ $id != DELETE ]] || { xl_main uninstall --yes; return; };;
             18) xl_prompt '操作 import/link/token-import/route/delete/list' action list; case $action in list) bash "$XL_APP/xl" relay list || true;; route) xl_prompt 入口节点ID id; xl_prompt 出口ID或direct file; bash "$XL_APP/xl" relay route "$id" "$file" || true;; import|link) xl_prompt 出口ID id; xl_prompt 文件 file; bash "$XL_APP/xl" relay "$action" "$id" "$file" || true;; delete) xl_prompt 出口ID id; bash "$XL_APP/xl" relay delete "$id" || true;; token-import) local pass; xl_prompt 出口ID id; xl_prompt Token文件 file; xl_prompt 口令文件 pass; bash "$XL_APP/xl" relay token-import "$id" "$file" "$pass" || true;; esac;;
-            19) xl_prompt '操作 set/delete/engine/list' action list; case $action in list) bash "$XL_APP/xl" forward list || true;; set) xl_prompt 规则ID id; xl_prompt 规则JSON文件 file; bash "$XL_APP/xl" forward set "$id" --file "$file" || true;; delete) xl_prompt 规则ID id; bash "$XL_APP/xl" forward delete "$id" || true;; engine) xl_prompt 规则ID id; xl_prompt 引擎xray或nftables file; bash "$XL_APP/xl" forward engine "$id" "$file" || true;; esac;;
+            19) (xl_forward_interactive) || true;;
             20) xl_prompt 节点数组JSON文件 file; bash "$XL_APP/xl" batch "$file" || true;; 21) bash "$XL_APP/xl" export all yaml || true;; 22) bash "$XL_APP/xl" start || true;; 23) bash "$XL_APP/xl" rollback || true;;
             *) xl_note '选择无效。';;
         esac
@@ -173,7 +201,7 @@ xl_main() {
         dns) xl_lock xl_transaction xl_dns_edit "${1:?DNS JSON 文件}";; schedule) xl_lock xl_schedule "${1:?分钟}";; tick) xl_lock xl_tick;;
         core) [[ ${1:-} == update ]] || xl_die '用法：xl core update'; xl_lock xl_transaction xl_core_edit;;
         rollback) xl_lock xl_transaction xl_rollback_edit;;
-        script) [[ ${1:-} == update ]] || xl_die '用法：xl script update owner/repo'; xl_lock xl_script_update "${2:?GitHub owner/repo}";;
+        script) [[ ${1:-} == update ]] || xl_die '用法：xl script update [owner/repo]'; xl_lock xl_script_update "${2:-$XL_REPO}";;
         relay)
             action=${1:-list}; shift || true
             case $action in list) xl_read xl_show_json config '{outbounds:.outbounds,rules:.routing.rules}';;
