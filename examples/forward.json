@@ -1,0 +1,1 @@
+{"engine":"xray","listen":"0.0.0.0","port":20001,"protocol":"tcp,udp","target":"example.com","target_port":443}

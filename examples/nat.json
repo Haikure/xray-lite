@@ -1,0 +1,1 @@
+{"enabled":true,"address":"example.com","mappings":[{"local":10001,"public":30001,"protocol":"tcp"},{"local":10002,"public":30002,"protocol":"udp"},{"local":10003,"public":30003,"protocol":"udp"},{"local":10004,"public":30004,"protocol":"udp"}]}

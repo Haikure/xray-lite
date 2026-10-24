@@ -1,0 +1,4 @@
+[
+  {"name":"Reality Vision","protocol":"vless","transport":"tcp","security":"reality","public_address":"example.com","port":10001,"sni":"www.microsoft.com"},
+  {"name":"HY2","protocol":"hysteria","transport":"hysteria","security":"tls","public_address":"example.com","port":10002,"sni":"example.com","up":100,"down":100,"hop_ports":"10002-10004","obfs_password":"replace-this-password"}
+]

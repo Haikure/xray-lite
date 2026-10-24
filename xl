@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+XL_APP=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
+export XL_APP
+for module in common environment service certificate release state nodes export relay forward argo menu; do
+    source "$XL_APP/lib/$module.sh"
+done
+xl_main "$@"
