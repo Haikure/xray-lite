@@ -25,7 +25,7 @@ xl
 
 ```text
 ════════════════════════════════════════════════
-  xray-lite v0.1.0 · Xray-core：26.10.21
+  xray-lite v0.1.1 · Xray-core：26.10.21
   Haikure/xray-lite
   服务：运行中  节点：3  模式：systemd
 ════════════════════════════════════════════════
@@ -165,7 +165,7 @@ xl script update
 xl uninstall --yes
 ```
 
-所有修改共用 flock；代际目录保存配置、元数据和核心引用，通过单个 `current` 符号链接切换；配置检查失败不切换，启动/规则应用失败恢复上一份。`previous` 保存上次成功修改之前的状态。脚本更新默认使用 `Haikure/xray-lite` 的 Release，菜单 13 直接更新；也可显式指定 `xl script update owner/repo`。发布需提供 `xray-lite.tar.gz` 和 GitHub SHA-256 digest，包根目录包含 `xl`、`lib/`、`install.sh`、`install-local.sh`、`VERSION`。一键安装使用仓库分支源码，无需先创建 Release。脚本包属于可执行代码，更新源应为自己信任的本项目发布仓库。
+所有修改共用 flock；代际目录保存配置、元数据和核心引用，通过单个 `current` 符号链接切换；配置检查失败不切换，启动/规则应用失败恢复上一份。`previous` 保存上次成功修改之前的状态。脚本更新默认使用 `Haikure/xray-lite` 的 Release，菜单 13 直接更新；若仓库没有可用 Release，则从默认分支源码归档更新；也可显式指定 `xl script update owner/repo`。Release 更新需提供 `xray-lite.tar.gz` 和 GitHub SHA-256 digest，包根目录包含 `xl`、`lib/`、`install.sh`、`install-local.sh`、`VERSION`。两种来源都会检查归档安全、脚本语法和版本文件。一键安装使用仓库分支源码，无需先创建 Release。脚本包属于可执行代码，更新源应为自己信任的本项目仓库。
 
 ## 功能差异与验收
 

@@ -167,7 +167,15 @@ xl_menu() {
             6) bash "$XL_APP/xl" restart || true;; 7) bash "$XL_APP/xl" stop || true;; 8) bash "$XL_APP/xl" status || true;; 9) bash "$XL_APP/xl" logs || true;;
             10) xl_prompt '间隔分钟，0关闭' id 0; bash "$XL_APP/xl" schedule "$id" || true;;
             11) bash "$XL_APP/xl" diagnose || true;; 12) bash "$XL_APP/xl" check || true;;
-            13) bash "$XL_APP/xl" script update || true;;
+            13)
+                xl_note '正在更新 xray-lite 脚本…'
+                if bash "$XL_APP/xl" script update; then
+                    :
+                else
+                    update_status=$?
+                    xl_note "脚本更新失败（退出码 $update_status），当前版本：$(cat "$XL_APP/VERSION")。请查看上方错误信息。"
+                fi
+                xl_prompt '按回车返回菜单' action '' || true;;
             14) (xl_dns_interactive) || true;;
             15)
                 xl_note '正在更新官方 Xray-core…'
