@@ -5,6 +5,29 @@ XL_APP=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$XL_APP/lib/common.sh"
 for module in environment service certificate release state nodes export relay forward argo interactive menu; do source "$XL_APP/lib/$module.sh"; done
 xl_root
+if ! command -v jq >/dev/null 2>&1; then
+    jq_memory_limit=$(xl_memory_limit)
+    if [[ $jq_memory_limit =~ ^[0-9]+$ ]] && (( jq_memory_limit <= 536870912 )); then
+        jq_asset=''
+        case $(uname -m) in
+            x86_64|amd64) jq_asset=jq-linux-amd64;;
+            aarch64|arm64) jq_asset=jq-linux-arm64;;
+            armv7*|armhf) jq_asset=jq-linux-armhf;;
+        esac
+        xl_note "检测到内存限制约 $((jq_memory_limit / 1048576)) MiB（不超过 512 MiB），缺少 jq；跳过 apt/apk 以避免 OOM。"
+        xl_note 'jq 官方发布页：https://github.com/jqlang/jq/releases'
+        if [[ -n $jq_asset ]]; then
+            xl_note '请直接安装对应架构的 jq 二进制：'
+            xl_note '  mkdir -p /usr/local/bin'
+            xl_note "  wget -O /usr/local/bin/jq https://github.com/jqlang/jq/releases/latest/download/$jq_asset"
+            xl_note '  chmod +x /usr/local/bin/jq'
+        else
+            xl_note "请下载适用于 $(uname -m) 的 Linux jq 二进制，放到 /usr/local/bin/jq 并赋予执行权限。"
+        fi
+        xl_note '安装后重新运行原安装命令。'
+        xl_die '低内存环境缺少 jq；安装后请重新运行。'
+    fi
+fi
 if [[ ${1:-} == --deps ]]; then
     if command -v apt-get >/dev/null; then apt-get update; apt-get install -y --no-install-recommends bash jq curl ca-certificates openssl unzip util-linux coreutils tar
     elif command -v apk >/dev/null; then apk add --no-cache bash jq curl ca-certificates openssl unzip util-linux coreutils tar

@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
+xl_installed_core_version() {
+    local binary="$XL_STATE/current/core" output
+    [[ -x $binary ]] || { printf '未安装'; return 0; }
+    if ! output=$("$binary" version 2>/dev/null); then printf '未知'; return 0; fi
+    output=${output%%$'\n'*}
+    [[ $output == Xray\ * ]] || { printf '未知'; return 0; }
+    output=${output#Xray }
+    printf '%s' "${output%% *}"
+}
 xl_menu_header() {
-    local version status count=0 init
-    version=$(cat "$XL_APP/VERSION"); init=$(xl_init_system)
+    local version core_version status count=0 init
+    version=$(cat "$XL_APP/VERSION"); core_version=$(xl_installed_core_version); init=$(xl_init_system)
     status='尚未安装'
     if [[ -f $XL_STATE/current/config.json ]]; then
         count=$(jq '.inbounds|map(select(.tag|startswith("xl-")))|length' "$XL_STATE/current/config.json")
@@ -9,7 +18,7 @@ xl_menu_header() {
     fi
     if [[ -t 1 && ${TERM:-dumb} != dumb && -z ${NO_COLOR:-} ]]; then printf '\033[1;36m'; fi
     printf '\n════════════════════════════════════════════════\n'
-    printf '  xray-lite v%s · 官方 Xray-core\n' "$version"
+    printf '  xray-lite v%s · Xray-core：%s\n' "$version" "$core_version"
     printf '  Haikure/xray-lite\n'
     printf '  服务：%s  节点：%s  模式：%s\n' "$status" "$count" "$init"
     printf '════════════════════════════════════════════════\n'

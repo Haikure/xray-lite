@@ -10,7 +10,7 @@
 sh -c 'f=$(mktemp) || exit 1; trap '\''rm -f "$f"'\'' EXIT; (curl -fsSL https://raw.githubusercontent.com/Haikure/xray-lite/main/install.sh -o "$f" || wget -qO "$f" https://raw.githubusercontent.com/Haikure/xray-lite/main/install.sh) && sh "$f"'
 ```
 
-入口会下载 `Haikure/xray-lite` 的 `main` 分支，自动准备 Bash、jq 等依赖，再下载并验证官方最新 Xray。Alpine 不需要先手动安装 Bash。交互终端中安装成功后自动打开中文管理菜单，之后直接输入 `xl` 即可再次进入。非交互执行不自动打开菜单。可在 `sh install.sh` 后加 `--no-menu` 禁止自动进入菜单。
+入口会下载 `Haikure/xray-lite` 的 `main` 分支，自动准备 Bash、jq 等依赖，再下载并验证官方最新 Xray。检测到内存限制不超过 512 MiB 且缺少 jq 时，会跳过 apt/apk 并提示从 jq 官方 Releases 下载对应架构的独立二进制。Alpine 不需要先手动安装 Bash。交互终端中安装成功后自动打开中文管理菜单，之后直接输入 `xl` 即可再次进入。非交互执行不自动打开菜单。可在 `sh install.sh` 后加 `--no-menu` 禁止自动进入菜单。
 
 从已经下载的完整项目目录安装：
 
@@ -25,7 +25,7 @@ xl
 
 ```text
 ════════════════════════════════════════════════
-  xray-lite v0.1.0 · 官方 Xray-core
+  xray-lite v0.1.0 · Xray-core：26.10.21
   Haikure/xray-lite
   服务：运行中  节点：3  模式：systemd
 ════════════════════════════════════════════════

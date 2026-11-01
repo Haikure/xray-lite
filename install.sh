@@ -14,13 +14,62 @@ case ${1-} in
 esac
 [ "$(id -u)" -eq 0 ] || die '请在 VPS 或已有容器内使用 root 运行。'
 
+memory_limit_bytes() {
+    memory_limit=$(awk '/MemTotal:/ {printf "%.0f", $2*1024; exit}' /proc/meminfo 2>/dev/null) || return 1
+    case $memory_limit in ''|*[!0-9]*) return 1;; esac
+    for memory_file in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+        [ -r "$memory_file" ] || continue
+        IFS= read -r memory_value < "$memory_file" || continue
+        case $memory_value in ''|*[!0-9]*) continue;; esac
+        [ "$memory_value" -gt 0 ] || continue
+        if [ "$memory_value" -lt "$memory_limit" ]; then memory_limit=$memory_value; fi
+    done
+    printf '%s\n' "$memory_limit"
+}
+jq_asset_for_arch() {
+    case $(uname -m) in
+        x86_64|amd64) printf 'jq-linux-amd64';;
+        aarch64|arm64) printf 'jq-linux-arm64';;
+        armv7*|armhf) printf 'jq-linux-armhf';;
+        *) return 1;;
+    esac
+}
+jq_binary_hint() {
+    jq_memory_mib=$(( $1 / 1048576 ))
+    jq_asset=$(jq_asset_for_arch 2>/dev/null || true)
+    printf '检测到内存限制约 %s MiB（不超过 512 MiB），缺少 jq；跳过 apt/apk 以避免 OOM。\n' "$jq_memory_mib" >&2
+    printf 'jq 官方发布页：https://github.com/jqlang/jq/releases\n' >&2
+    if [ -n "$jq_asset" ]; then
+        printf '请直接安装对应架构的 jq 二进制：\n' >&2
+        printf '  mkdir -p /usr/local/bin\n' >&2
+        printf '  wget -O /usr/local/bin/jq https://github.com/jqlang/jq/releases/latest/download/%s\n' "$jq_asset" >&2
+        printf '  chmod +x /usr/local/bin/jq\n' >&2
+    else
+        printf '请下载适用于 %s 的 Linux jq 二进制，放到 /usr/local/bin/jq 并赋予执行权限。\n' "$(uname -m)" >&2
+    fi
+    printf '安装后重新运行原安装命令。\n' >&2
+}
 prepare_dependencies() {
-    missing=0
+    missing=0 jq_missing=0
     for tool in bash jq curl openssl unzip flock timeout sha256sum tar mktemp readlink; do
-        command -v "$tool" >/dev/null 2>&1 || missing=1
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing=1
+            [ "$tool" != jq ] || jq_missing=1
+        fi
     done
     [ -s /etc/ssl/certs/ca-certificates.crt ] || [ -s /etc/ssl/cert.pem ] || missing=1
     [ "$missing" -ne 0 ] || return 0
+    if [ "$jq_missing" -eq 1 ]; then
+        memory_limit=$(memory_limit_bytes 2>/dev/null || true)
+        case $memory_limit in
+            ''|*[!0-9]*) ;;
+            *)
+                if [ "$memory_limit" -le 536870912 ]; then
+                    jq_binary_hint "$memory_limit"
+                    die '低内存环境缺少 jq；安装后请重新运行。'
+                fi;;
+        esac
+    fi
     printf '正在安装 xray-lite 所需依赖…\n' >&2
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update

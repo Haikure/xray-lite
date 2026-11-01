@@ -156,7 +156,7 @@ EOF
     xl_menu_file_command "$spec" node add
 }
 xl_menu() {
-    local choice id file action
+    local choice id file action update_status
     while :; do
         xl_menu_header
         read -r -p '请选择：' choice || return 0
@@ -169,7 +169,16 @@ xl_menu() {
             11) bash "$XL_APP/xl" diagnose || true;; 12) bash "$XL_APP/xl" check || true;;
             13) bash "$XL_APP/xl" script update || true;;
             14) (xl_dns_interactive) || true;;
-            15) bash "$XL_APP/xl" core update || true;; 16) (xl_nat_interactive) || true;;
+            15)
+                xl_note '正在更新官方 Xray-core…'
+                if bash "$XL_APP/xl" core update; then
+                    :
+                else
+                    update_status=$?
+                    xl_note "Xray-core 更新失败（退出码 $update_status），当前版本：$(xl_installed_core_version)。请查看上方错误信息。"
+                fi
+                xl_prompt '按回车返回菜单' action '' || true;;
+            16) (xl_nat_interactive) || true;;
             17) xl_prompt '输入 DELETE 删除本项目所有数据' id; [[ $id != DELETE ]] || { xl_main uninstall --yes; return; };;
             18) xl_prompt '操作 import/link/token-import/route/delete/list' action list; case $action in list) bash "$XL_APP/xl" relay list || true;; route) xl_prompt 入口节点ID id; xl_prompt 出口ID或direct file; bash "$XL_APP/xl" relay route "$id" "$file" || true;; import|link) xl_prompt 出口ID id; xl_prompt 文件 file; bash "$XL_APP/xl" relay "$action" "$id" "$file" || true;; delete) xl_prompt 出口ID id; bash "$XL_APP/xl" relay delete "$id" || true;; token-import) local pass; xl_prompt 出口ID id; xl_prompt Token文件 file; xl_prompt 口令文件 pass; bash "$XL_APP/xl" relay token-import "$id" "$file" "$pass" || true;; esac;;
             19) (xl_forward_interactive) || true;;
@@ -199,7 +208,7 @@ xl_main() {
         nat) case ${1:-show} in show) xl_read xl_show_json meta '.nat';; set) xl_lock xl_transaction xl_nat_edit "${2:?NAT 文件}";; *) xl_die 'NAT 操作无效';; esac;;
         config) case ${1:-show} in show) xl_read xl_show_json config '.';; apply) xl_lock xl_transaction xl_config_edit "${2:?配置文件}";; *) xl_die '配置操作无效';; esac;;
         dns) xl_lock xl_transaction xl_dns_edit "${1:?DNS JSON 文件}";; schedule) xl_lock xl_schedule "${1:?分钟}";; tick) xl_lock xl_tick;;
-        core) [[ ${1:-} == update ]] || xl_die '用法：xl core update'; xl_lock xl_transaction xl_core_edit;;
+        core) [[ ${1:-} == update ]] || xl_die '用法：xl core update'; xl_lock xl_transaction xl_core_edit; xl_note "Xray-core 更新成功，当前版本：$(xl_installed_core_version)。";;
         rollback) xl_lock xl_transaction xl_rollback_edit;;
         script) [[ ${1:-} == update ]] || xl_die '用法：xl script update [owner/repo]'; xl_lock xl_script_update "${2:-$XL_REPO}";;
         relay)
