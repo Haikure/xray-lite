@@ -2,6 +2,8 @@
 # Standalone POSIX bootstrap: also runs on Alpine before Bash is installed.
 set -eu
 umask 077
+PATH=/usr/local/bin:$PATH
+export PATH
 XL_REPO=${XL_REPO:-Haikure/xray-lite}
 XL_REF=${XL_REF:-main}
 export XL_REPO
@@ -34,59 +36,82 @@ jq_asset_for_arch() {
         *) return 1;;
     esac
 }
-jq_binary_hint() {
-    jq_memory_mib=$(( $1 / 1048576 ))
-    jq_asset=$(jq_asset_for_arch 2>/dev/null || true)
-    printf '检测到内存限制约 %s MiB（不超过 512 MiB），缺少 jq；跳过 apt/apk 以避免 OOM。\n' "$jq_memory_mib" >&2
-    printf 'jq 官方发布页：https://github.com/jqlang/jq/releases\n' >&2
-    if [ -n "$jq_asset" ]; then
-        printf '请直接安装对应架构的 jq 二进制：\n' >&2
-        printf '  mkdir -p /usr/local/bin\n' >&2
-        printf '  wget -O /usr/local/bin/jq https://github.com/jqlang/jq/releases/latest/download/%s\n' "$jq_asset" >&2
-        printf '  chmod +x /usr/local/bin/jq\n' >&2
-    else
-        printf '请下载适用于 %s 的 Linux jq 二进制，放到 /usr/local/bin/jq 并赋予执行权限。\n' "$(uname -m)" >&2
-    fi
-    printf '安装后重新运行原安装命令。\n' >&2
+bootstrap_download() {
+    printf '下载：%s\n' "$1" >&2
+    if [ -t 2 ]; then download_display=--progress-bar; else download_display=--silent; fi
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 300 --retry 2 \
+        "$download_display" --show-error "$1" -o "$2" || die "下载失败：$1（请检查网络、DNS 和系统时间）"
+    printf '下载完成：%s 字节\n' "$(wc -c < "$2")" >&2
 }
+install_jq_binary() (
+    jq_asset=$(jq_asset_for_arch) || die "不支持的 jq 架构：$(uname -m)"
+    # Pinned official checksums: https://jqlang.org/download/
+    case $jq_asset in
+        jq-linux-amd64) jq_digest=b1c22172dd303f3be49e935aa56aa48a8b7a46e0bc838b4997d3bb451495870f;;
+        jq-linux-arm64) jq_digest=8b85c817833814ddca00a144c33705546355afccf0cf39b188f3cdb48b852309;;
+        jq-linux-armhf) jq_digest=78458244fb546469b4042e9e07cf78714ef6848895eb9515df76b4eb0b1dc992;;
+    esac
+    mkdir -p /usr/local/bin
+    jq_stage=$(mktemp -d /usr/local/bin/.xl-jq.XXXXXXXX)
+    trap 'rm -rf -- "$jq_stage"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    bootstrap_download "https://github.com/jqlang/jq/releases/download/jq-1.8.2/$jq_asset" "$jq_stage/jq"
+    printf '校验 jq SHA-256…\n' >&2
+    [ "$(sha256sum "$jq_stage/jq" | awk '{print $1}')" = "$jq_digest" ] || die 'jq 摘要不符，未安装。'
+    chmod 755 "$jq_stage/jq"
+    [ "$("$jq_stage/jq" --version)" = jq-1.8.2 ] || die 'jq 二进制无法运行或版本不符。'
+    "$jq_stage/jq" -en 'true' >/dev/null || die 'jq 自检失败。'
+    mv -f "$jq_stage/jq" /usr/local/bin/jq
+    printf 'jq 1.8.2 已安装：/usr/local/bin/jq\n' >&2
+)
 prepare_dependencies() {
-    missing=0 jq_missing=0
+    packages='' jq_binary=0
+    printf '[1/5] 检查安装依赖…\n' >&2
+    memory_limit=$(memory_limit_bytes 2>/dev/null || true)
     for tool in bash jq curl openssl unzip flock timeout sha256sum tar mktemp readlink; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            missing=1
-            [ "$tool" != jq ] || jq_missing=1
+        if command -v "$tool" >/dev/null 2>&1; then continue; fi
+        printf '缺少依赖：%s\n' "$tool" >&2
+        if [ "$tool" = jq ] && [ -n "$memory_limit" ] && [ "$memory_limit" -le 536870912 ]; then
+            printf '内存限制约 %s MiB，jq 将使用官方独立二进制，减少包管理器开销。\n' "$((memory_limit / 1048576))" >&2
+            jq_binary=1
+            continue
         fi
+        case $tool in flock) package=util-linux;; timeout|sha256sum|mktemp|readlink) package=coreutils;; *) package=$tool;; esac
+        case " $packages " in *" $package "*) ;; *) packages="$packages $package";; esac
     done
-    [ -s /etc/ssl/certs/ca-certificates.crt ] || [ -s /etc/ssl/cert.pem ] || missing=1
-    [ "$missing" -ne 0 ] || return 0
-    if [ "$jq_missing" -eq 1 ]; then
-        memory_limit=$(memory_limit_bytes 2>/dev/null || true)
-        case $memory_limit in
-            ''|*[!0-9]*) ;;
-            *)
-                if [ "$memory_limit" -le 536870912 ]; then
-                    jq_binary_hint "$memory_limit"
-                    die '低内存环境缺少 jq；安装后请重新运行。'
-                fi;;
-        esac
+    if ! [ -s /etc/ssl/certs/ca-certificates.crt ] && ! [ -s /etc/ssl/cert.pem ]; then packages="$packages ca-certificates"; fi
+    if [ -n "$packages" ]; then
+        printf '正在安装缺少的依赖：%s\n' "$packages" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update || die 'apt 软件源更新失败。'
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages || die 'apt 依赖安装失败。'
+        elif command -v apk >/dev/null 2>&1; then
+            apk add --no-cache $packages || die 'apk 依赖安装失败。'
+        else
+            die "请先安装依赖：$packages"
+        fi
     fi
-    printf '正在安装 xray-lite 所需依赖…\n' >&2
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bash jq curl ca-certificates openssl unzip util-linux coreutils tar
-    elif command -v apk >/dev/null 2>&1; then
-        apk add --no-cache bash jq curl ca-certificates openssl unzip util-linux coreutils tar
-    else
-        die '请安装 Bash、jq、curl、CA 证书、OpenSSL、unzip、flock、timeout、coreutils 和 tar。'
-    fi
+    if [ "$jq_binary" -eq 1 ]; then install_jq_binary; fi
+    for tool in bash jq curl openssl unzip flock timeout sha256sum tar mktemp readlink; do
+        command -v "$tool" >/dev/null 2>&1 || die "依赖安装后仍不可用：$tool"
+    done
+    jq -en 'true' >/dev/null || die 'jq 无法正常运行，请检查安装文件。'
+    printf '依赖检查完成：%s\n' "$(jq --version)" >&2
 }
 
 case ${1-} in --deps) prepare_dependencies; exit 0;; esac
 no_menu=0
-if [ "${1-}" = --no-menu ]; then no_menu=1; shift; fi
 # Offline installation must not cause package or repository requests.
 offline=0
-for argument in "$@"; do [ "$argument" != --offline ] || offline=1; done
+for argument in "$@"; do
+    shift
+    case $argument in
+        --no-menu) no_menu=1;;
+        --offline) offline=1; set -- "$@" "$argument";;
+        *) set -- "$@" "$argument";;
+    esac
+done
 if [ "$offline" -eq 0 ]; then prepare_dependencies; fi
 
 source_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -99,9 +124,8 @@ if [ ! -f "$source_dir/install-local.sh" ] || [ ! -f "$source_dir/lib/common.sh"
     case $XL_REPO in *[!A-Za-z0-9_./-]*|*/../*|../*|/*) die '仓库名称无效。';; esac
     case $XL_REF in ''|*[!A-Za-z0-9_.-]*|..*) die '分支或标签名称无效。';; esac
     download_dir=$(mktemp -d)
-    printf '正在下载 %s (%s)…\n' "$XL_REPO" "$XL_REF" >&2
-    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 300 --retry 2 \
-        --silent --show-error "https://codeload.github.com/$XL_REPO/tar.gz/$XL_REF" -o "$download_dir/source.tar.gz"
+    printf '[2/5] 获取脚本 %s (%s)…\n' "$XL_REPO" "$XL_REF" >&2
+    bootstrap_download "https://codeload.github.com/$XL_REPO/tar.gz/$XL_REF" "$download_dir/source.tar.gz"
     tar -tzf "$download_dir/source.tar.gz" | awk '/^\// || /(^|\/)\.\.($|\/)/ {bad=1} END {exit bad}' || die '下载的归档路径无效。'
     tar -tvzf "$download_dir/source.tar.gz" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit bad}' || die '下载的归档包含不支持的文件类型。'
     mkdir "$download_dir/source"
@@ -109,7 +133,7 @@ if [ ! -f "$source_dir/install-local.sh" ] || [ ! -f "$source_dir/lib/common.sh"
     source_dir="$download_dir/source"
     [ -f "$source_dir/install-local.sh" ] && [ -f "$source_dir/lib/common.sh" ] && [ -f "$source_dir/xl" ] || die '下载的仓库文件不完整。'
 fi
-bash "$source_dir/install-local.sh" "$@"
+XL_DEPS_READY=1 bash "$source_dir/install-local.sh" "$@"
 if [ "$no_menu" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
     bash "${XL_HOME:-/opt/xray-lite}/app/xl" menu
 fi

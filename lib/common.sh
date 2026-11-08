@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Paths are independent of any existing Xray installation.
+export PATH="/usr/local/bin:$PATH"
 : "${XL_HOME:=/opt/xray-lite}"
 : "${XL_STATE:=/var/lib/xray-lite}"
 : "${XL_RUN:=/run/xray-lite}"

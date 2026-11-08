@@ -17,8 +17,10 @@ xl supervise                           前台监管，含定时重启与日志�
 xl schedule MINUTES | tick              定时重启（0 关闭）/ 定时器入口
 xl config show | apply config.json      查看 / 检查并应用完整配置
 xl dns dns.json                        修改 Xray DNS（对象格式）
-xl core update | rollback              官方最新核心（含预发布）/ 恢复前一版本
-xl script update [owner/repo]           更新脚本，默认 Haikure/xray-lite
+xl core check                          检查当前及官方最新版本（含预发布）
+xl core update [latest|v版本] [--yes]   选择并确认核心版本；自动化需 --yes
+xl rollback                            恢复前一版本
+xl script update [owner/repo] [--ref 分支或标签]  更新脚本
 xl relay import ID outbound.json        导入 Xray 出口对象
 xl relay link ID link.txt               导入第三方分享链接
 xl relay token-export NODE passfile     输出项目加密 Token
@@ -46,8 +48,10 @@ xl_bootstrap() {
     xl_state_init
     local start=1 offline=0 release='' archive=''
     while (( $# )); do
-        case $1 in --no-start) start=0; shift;; --offline) [[ $# -ge 3 ]] || xl_die '--offline release.json core.zip'; offline=1; release=$2; archive=$3; shift 3;; *) xl_die "安装参数无效：$1";; esac
+        case $1 in --no-menu) shift;; --no-start) start=0; shift;; --offline) [[ $# -ge 3 ]] || xl_die '--offline release.json core.zip'; offline=1; release=$2; archive=$3; shift 3;; *) xl_die "安装参数无效：$1";; esac
     done
+    xl_note "[4/5] 配置服务（$(xl_init_system)）并安装 Xray 核心…"
+    if (( start == 0 )); then xl_note '已指定 --no-start：安装后不主动启动已停止的服务。'; fi
     xl_service_install
     XL_TX_START=$start
     if (( offline )); then xl_transaction xl_core_offline_edit "$release" "$archive"; else xl_transaction xl_core_edit; fi
@@ -170,7 +174,8 @@ xl_menu() {
             13)
                 xl_note '正在更新 xray-lite 脚本…'
                 if bash "$XL_APP/xl" script update; then
-                    :
+                    xl_note '正在重新载入更新后的菜单…'
+                    exec bash "$XL_HOME/app/xl" menu
                 else
                     update_status=$?
                     xl_note "脚本更新失败（退出码 $update_status），当前版本：$(cat "$XL_APP/VERSION")。请查看上方错误信息。"
@@ -178,7 +183,7 @@ xl_menu() {
                 xl_prompt '按回车返回菜单' action '' || true;;
             14) (xl_dns_interactive) || true;;
             15)
-                xl_note '正在更新官方 Xray-core…'
+                xl_note '正在检查官方 Xray-core，随后选择并确认目标版本…'
                 if bash "$XL_APP/xl" core update; then
                     :
                 else
@@ -216,9 +221,11 @@ xl_main() {
         nat) case ${1:-show} in show) xl_read xl_show_json meta '.nat';; set) xl_lock xl_transaction xl_nat_edit "${2:?NAT 文件}";; *) xl_die 'NAT 操作无效';; esac;;
         config) case ${1:-show} in show) xl_read xl_show_json config '.';; apply) xl_lock xl_transaction xl_config_edit "${2:?配置文件}";; *) xl_die '配置操作无效';; esac;;
         dns) xl_lock xl_transaction xl_dns_edit "${1:?DNS JSON 文件}";; schedule) xl_lock xl_schedule "${1:?分钟}";; tick) xl_lock xl_tick;;
-        core) [[ ${1:-} == update ]] || xl_die '用法：xl core update'; xl_lock xl_transaction xl_core_edit; xl_note "Xray-core 更新成功，当前版本：$(xl_installed_core_version)。";;
+        core)
+            action=${1:-check}; (( $# == 0 )) || shift
+            case $action in check|update) xl_core_update "$action" "$@";; *) xl_die '用法：xl core check | xl core update [latest|v版本] [--yes]';; esac;;
         rollback) xl_lock xl_transaction xl_rollback_edit;;
-        script) [[ ${1:-} == update ]] || xl_die '用法：xl script update [owner/repo]'; xl_lock xl_script_update "${2:-$XL_REPO}";;
+        script) [[ ${1:-} == update ]] || xl_die '用法：xl script update [owner/repo] [--ref 分支或标签]'; shift; xl_lock xl_script_update "$@";;
         relay)
             action=${1:-list}; shift || true
             case $action in list) xl_read xl_show_json config '{outbounds:.outbounds,rules:.routing.rules}';;

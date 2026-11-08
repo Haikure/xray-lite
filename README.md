@@ -10,7 +10,9 @@
 sh -c 'f=$(mktemp) || exit 1; trap '\''rm -f "$f"'\'' EXIT; (curl -fsSL https://raw.githubusercontent.com/Haikure/xray-lite/main/install.sh -o "$f" || wget -qO "$f" https://raw.githubusercontent.com/Haikure/xray-lite/main/install.sh) && sh "$f"'
 ```
 
-入口会下载 `Haikure/xray-lite` 的 `main` 分支，自动准备 Bash、jq 等依赖，再下载并验证官方最新 Xray。检测到内存限制不超过 512 MiB 且缺少 jq 时，会跳过 apt/apk 并提示从 jq 官方 Releases 下载对应架构的独立二进制。Alpine 不需要先手动安装 Bash。交互终端中安装成功后自动打开中文管理菜单，之后直接输入 `xl` 即可再次进入。非交互执行不自动打开菜单。可在 `sh install.sh` 后加 `--no-menu` 禁止自动进入菜单。
+入口会下载 `Haikure/xray-lite` 的 `main` 分支，自动准备 Bash、jq 等依赖，再下载并验证官方最新 Xray。检测到内存限制不超过 512 MiB 且缺少 jq 时，会自动下载官方 jq 1.8.2 独立二进制，按[官方摘要](https://raw.githubusercontent.com/jqlang/jq/master/sig/v1.8.2/sha256sum.txt)校验并检查运行后安装到 `/usr/local/bin/jq`。如果只缺 jq，不调用 apt/apk；其他缺失工具通过系统包管理器按需安装。两种安装入口共用依赖检查，离线安装不安装依赖、不联网。Alpine 不需要先手动安装 Bash。
+
+安装会显示依赖检查、获取脚本、安装脚本、核心下载与校验、服务状态；终端下载显示进度条，重定向日志记录下载地址、完成字节数及错误。安装结束显示实际核心路径、配置和日志位置。交互终端中安装成功后自动打开中文管理菜单，之后输入 `xl` 再次进入。非交互执行不自动打开菜单。可加 `--no-menu` 禁止自动进入菜单。
 
 从已经下载的完整项目目录安装：
 
@@ -49,7 +51,20 @@ xl
 
 ## 核心安装策略
 
-下载直接访问官方 Release API 的完整分页列表，按 `published_at` 选择最新非草稿项，包括预发布，无预发布确认。不使用 `/releases/latest`。最新发布缺少架构资产或 SHA-256 摘要即失败，不降级。检查摘要、实际版本和当前配置后替换，应用失败回滚。
+首次安装直接访问官方 Release API 的完整分页列表，按 `published_at` 选择最新非草稿项，包括预发布。不使用 `/releases/latest`。核心更新先显示当前版本、实际路径和最新发布；交互终端列出近期版本，输入目标版本（默认最新），显示正式版/预发布标记，再确认安装。相同版本跳过；非交互更新必须显式使用 `--yes`。所选发布缺少架构资产或 SHA-256 摘要即失败，不自动降级。检查摘要、实际版本和当前配置后替换，应用失败回滚。
+
+默认安装路径（`xl status` 显示实际路径，也支持自定义 `XL_HOME`、`XL_STATE` 等）：
+
+| 内容 | 默认位置 |
+| --- | --- |
+| 管理脚本 | `/opt/xray-lite/app/` |
+| 管理命令 | `/usr/local/bin/xl` → `/opt/xray-lite/app/xl` |
+| Xray 二进制 | `/var/lib/xray-lite/cores/v版本-架构-SHA256` |
+| 当前核心入口 | `/var/lib/xray-lite/current/core` → 所选二进制 |
+| 当前配置 | `/var/lib/xray-lite/current/config.json` |
+| 日志 | `/var/lib/xray-lite/logs/core.log`；systemd 也可用 `xl logs` |
+
+本项目通过 `current/core` 运行 Xray，不创建全局 `xray` 命令；`command -v xray` 找不到它并不代表安装失败。
 
 离线安装接受**事先从官方取得的**单个 Release JSON 和该发布的原始 zip，并执行同样的摘要与版本检查：
 
@@ -159,13 +174,21 @@ VLESS-WS/Trojan-WS 可以使用临时或固定隧道。按官方 cloudflared Rel
 ## 更新、回滚、卸载
 
 ```sh
-xl core update
+xl core check                         # 只检查当前及最新版本
+xl core update                        # 终端中选择版本并确认
+xl core update v版本号                 # 检查指定版本后确认
+xl core update latest --yes            # 自动化：明确同意安装最新版本
 xl rollback
 xl script update
+xl script update --ref main            # 显式使用 main 源码，跳过 Release API
 xl uninstall --yes
 ```
 
-所有修改共用 flock；代际目录保存配置、元数据和核心引用，通过单个 `current` 符号链接切换；配置检查失败不切换，启动/规则应用失败恢复上一份。`previous` 保存上次成功修改之前的状态。脚本更新默认使用 `Haikure/xray-lite` 的 Release，菜单 13 直接更新；若仓库没有可用 Release，则从默认分支源码归档更新；也可显式指定 `xl script update owner/repo`。Release 更新需提供 `xray-lite.tar.gz` 和 GitHub SHA-256 digest，包根目录包含 `xl`、`lib/`、`install.sh`、`install-local.sh`、`VERSION`。两种来源都会检查归档安全、脚本语法和版本文件。一键安装使用仓库分支源码，无需先创建 Release。脚本包属于可执行代码，更新源应为自己信任的本项目仓库。
+所有修改共用 flock；代际目录保存配置、元数据和核心引用，通过单个 `current` 符号链接切换；配置检查失败不切换，启动/规则应用失败恢复上一份。`previous` 保存上次成功修改之前的状态。核心更新的查询与确认在持锁前完成，安装时基于最新磁盘配置检查。
+
+脚本更新默认使用 `Haikure/xray-lite` 的 Release，菜单 13 更新成功后重新载入新菜单。若没有可用 Release 或发布没有 `xray-lite.tar.gz`，则从默认分支源码归档更新。网络、API 或摘要错误会明确报错并保留当前脚本。需要直接使用源码时可运行 `xl script update --ref main`，也可指定 `xl script update owner/repo --ref 分支或标签`。
+
+Release 包需提供 GitHub SHA-256 digest，包根目录包含 `xl`、`lib/`、`install.sh`、`install-local.sh`、`VERSION`、`README.md`。两种来源都会检查归档安全、必需文件、脚本语法和版本文件；替换后再次自检，失败恢复 `app.previous`。一键安装使用仓库分支源码，无需先创建 Release。脚本包属于可执行代码，更新源应为自己信任的本项目仓库。
 
 ## 功能差异与验收
 

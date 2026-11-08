@@ -66,6 +66,7 @@ xl_service_start() {
 xl_service_restart() { xl_service_stop || return 1; xl_service_start; }
 xl_service_status() {
     printf '服务模式：%s\n%s\n' "$(xl_init_system)" "$(xl_runtime_state "$(xl_current)")"
+    printf '脚本目录：%s/app\n核心入口：%s/current/core\n核心文件：%s\n配置文件：%s/current/config.json\n' "$XL_HOME" "$XL_STATE" "$(readlink -f "$(xl_core)")" "$XL_STATE"
     "$(xl_core)" version
 }
 xl_service_logs() {
