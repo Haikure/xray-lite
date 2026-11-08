@@ -11,6 +11,7 @@ die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 case ${1-} in
     --help|-h)
         printf '%s\n' '用法：sh install.sh [--no-menu] [--no-start] [--offline release.json core.zip]'
+        printf '%s\n' '      sh install.sh --script-only（仅更新已安装的管理脚本）'
         printf '%s\n' '自动准备依赖并安装官方最新 Xray，交互终端安装完成后打开 xl 菜单。'
         exit 0;;
 esac
@@ -101,18 +102,24 @@ prepare_dependencies() {
 }
 
 case ${1-} in --deps) prepare_dependencies; exit 0;; esac
-no_menu=0
+no_menu=0 script_only=0
 # Offline installation must not cause package or repository requests.
 offline=0
 for argument in "$@"; do
     shift
     case $argument in
         --no-menu) no_menu=1;;
+        --script-only) script_only=1; no_menu=1; set -- "$@" "$argument";;
         --offline) offline=1; set -- "$@" "$argument";;
         *) set -- "$@" "$argument";;
     esac
 done
-if [ "$offline" -eq 0 ]; then prepare_dependencies; fi
+if [ "$script_only" -eq 1 ]; then
+    for argument in "$@"; do [ "$argument" = --script-only ] || die '--script-only 不能与核心安装参数一起使用。'; done
+    [ -f "${XL_HOME:-/opt/xray-lite}/app/VERSION" ] && [ -f "${XL_STATE:-/var/lib/xray-lite}/current/config.json" ] || die '未找到已有安装；首次安装请运行不带 --script-only 的安装命令。'
+    for tool in bash jq curl tar; do command -v "$tool" >/dev/null 2>&1 || die "缺少迁移依赖：$tool"; done
+    printf '仅迁移管理脚本，保留当前 Xray 核心、配置和运行状态。\n' >&2
+elif [ "$offline" -eq 0 ]; then prepare_dependencies; fi
 
 source_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 download_dir=''
@@ -124,7 +131,7 @@ if [ ! -f "$source_dir/install-local.sh" ] || [ ! -f "$source_dir/lib/common.sh"
     case $XL_REPO in *[!A-Za-z0-9_./-]*|*/../*|../*|/*) die '仓库名称无效。';; esac
     case $XL_REF in ''|*[!A-Za-z0-9_.-]*|..*) die '分支或标签名称无效。';; esac
     download_dir=$(mktemp -d)
-    printf '[2/5] 获取脚本 %s (%s)…\n' "$XL_REPO" "$XL_REF" >&2
+    printf '获取脚本 %s (%s)…\n' "$XL_REPO" "$XL_REF" >&2
     bootstrap_download "https://codeload.github.com/$XL_REPO/tar.gz/$XL_REF" "$download_dir/source.tar.gz"
     tar -tzf "$download_dir/source.tar.gz" | awk '/^\// || /(^|\/)\.\.($|\/)/ {bad=1} END {exit bad}' || die '下载的归档路径无效。'
     tar -tvzf "$download_dir/source.tar.gz" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit bad}' || die '下载的归档包含不支持的文件类型。'

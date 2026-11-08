@@ -142,18 +142,34 @@ xl_script_archive_validate() {
     tar -tvzf "$archive" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit bad}' || xl_die '脚本包不允许软链接、硬链接或设备文件。'
 }
 xl_script_source_branch() {
-    local repository=$1 stage=$2 branch=${3:-}
-    if [[ -z $branch ]]; then
-        xl_download "https://api.github.com/repos/$repository" "$stage/repository.json" || xl_die '获取脚本仓库信息失败。'
-        branch=$(jq -er 'select(type=="object" and (.default_branch|type)=="string" and (.default_branch|length)>0)|.default_branch' "$stage/repository.json") || xl_die '仓库没有有效的默认分支。'
-    fi
-    [[ $branch =~ ^[A-Za-z0-9._/-]+$ && $branch != /* && $branch != */ && $branch != *..* ]] || xl_die '仓库默认分支名称无效。'
+    local repository=$1 stage=$2 branch=${3:-main}
+    [[ $branch =~ ^[A-Za-z0-9._/-]+$ && $branch != /* && $branch != */ && $branch != *..* ]] || xl_die '分支或标签名称无效。'
     xl_note "从 $repository 的 $branch 源码更新…"
     xl_download "https://codeload.github.com/$repository/tar.gz/$branch" "$stage/source.tar.gz" || xl_die '下载源码归档失败。'
     printf '%s' "$branch"
 }
+xl_script_validate() {
+    local app=$1 script version
+    for script in xl VERSION README.md install.sh install-local.sh; do
+        [[ -f $app/$script ]] || xl_die "脚本归档缺少 $script。"
+    done
+    for script in common environment service certificate release state nodes export relay forward argo interactive menu; do
+        [[ -f $app/lib/$script.sh ]] || xl_die "脚本归档缺少 lib/$script.sh。"
+    done
+    for script in model client create mihomo import; do
+        [[ -f $app/lib/$script.jq ]] || xl_die "脚本归档缺少 lib/$script.jq。"
+    done
+    sh -n "$app/install.sh" || xl_die '安装入口语法检查失败。'
+    for script in "$app/xl" "$app/install-local.sh" "$app/"lib/*.sh; do
+        bash -n "$script" || xl_die "脚本语法检查失败：$script"
+    done
+    version=$(cat "$app/VERSION")
+    [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || xl_die '脚本 VERSION 格式无效。'
+    [[ $(bash "$app/xl" version) == "$version" ]] || xl_die '候选脚本自检失败。'
+    printf '%s' "$version"
+}
 xl_script_update() (
-    local repository=$XL_REPO ref='' stage asset tag old release_status source_kind=release branch archive version script replaced=0 completed=0
+    local repository=$XL_REPO ref=main stage tag old branch archive version replaced=0 completed=0
     if [[ $# -gt 0 && $1 != --* ]]; then repository=$1; shift; fi
     if (( $# )); then
         [[ $# == 2 && $1 == --ref && -n $2 ]] || xl_die '用法：xl script update [owner/repo] [--ref 分支或标签]'
@@ -177,51 +193,16 @@ xl_script_update() (
     trap 'exit 130' INT
     trap 'exit 143' TERM
     xl_note "[1/4] 检查脚本更新；当前版本：$(cat "$XL_HOME/app/VERSION")；来源：$repository"
-    if [[ -n $ref ]]; then
-        source_kind=branch
-    elif xl_release_fetch "$repository" "$stage/release.json"; then
-        tag=$(jq -r .tag_name "$stage/release.json")
-        if asset=$(jq -ce '.assets[]|select(.name=="xray-lite.tar.gz")' "$stage/release.json"); then
-            archive="$stage/app.tar.gz"
-            xl_note "[2/4] 下载脚本发布包 $tag…"
-            xl_download "$(jq -r .browser_download_url <<< "$asset")" "$archive"
-            xl_verify_asset "$asset" "$archive"
-        else
-            xl_note "发布 $tag 没有 xray-lite.tar.gz，改用默认分支源码。"
-            source_kind=branch
-        fi
-    else
-        release_status=$?
-        (( release_status == 2 )) || xl_die "无法获取 $repository 的 Release。"
-        xl_note "$repository 没有可用的已发布 Release，改用默认分支源码归档。"
-        source_kind=branch
-    fi
-    if [[ $source_kind == branch ]]; then
-        xl_note '[2/4] 下载脚本源码…'
-        branch=$(xl_script_source_branch "$repository" "$stage" "$ref")
-        archive="$stage/source.tar.gz"
-    fi
+    xl_note '[2/4] 下载脚本源码…'
+    branch=$(xl_script_source_branch "$repository" "$stage" "$ref")
+    archive="$stage/source.tar.gz"
     xl_note '[3/4] 检查归档、脚本语法和版本…'
     xl_script_archive_validate "$archive"
     mkdir "$stage/app"
-    if [[ $source_kind == branch ]]; then tar -xzf "$archive" --strip-components=1 --no-same-owner -C "$stage/app"
-    else tar -xzf "$archive" --no-same-owner -C "$stage/app"; fi
-    for script in xl VERSION README.md install.sh install-local.sh; do
-        [[ -f $stage/app/$script ]] || xl_die "脚本归档缺少 $script。"
-    done
-    for script in common environment service certificate release state nodes export relay forward argo interactive menu; do
-        [[ -f $stage/app/lib/$script.sh ]] || xl_die "脚本归档缺少 lib/$script.sh。"
-    done
-    for script in model client create mihomo import; do
-        [[ -f $stage/app/lib/$script.jq ]] || xl_die "脚本归档缺少 lib/$script.jq。"
-    done
-    sh -n "$stage/app/install.sh"
-    for script in "$stage/app/xl" "$stage/app/install-local.sh" "$stage/app/"lib/*.sh; do bash -n "$script"; done
+    tar -xzf "$archive" --strip-components=1 --no-same-owner -C "$stage/app"
+    version=$(xl_script_validate "$stage/app")
     chmod 755 "$stage/app/xl" "$stage/app/install.sh" "$stage/app/install-local.sh"
-    version=$(cat "$stage/app/VERSION")
-    [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || xl_die '脚本 VERSION 格式无效。'
-    [[ $(bash "$stage/app/xl" version) == "$version" ]] || xl_die '候选脚本自检失败。'
-    if [[ $source_kind == branch ]]; then tag="$branch（v$version）"; fi
+    tag="$branch（v$version）"
     [[ ! -e $XL_HOME/app.previous ]] || rm -rf -- "$XL_HOME/app.previous"
     xl_note "[4/4] 安装脚本 $tag 到 $XL_HOME/app…"
     mv "$XL_HOME/app" "$old"

@@ -21,13 +21,28 @@ sh install.sh
 xl
 ```
 
+旧版本（包括 0.1.0）迁移到从 `main` 更新：先退出旧菜单，以 **root** 执行下面的命令。它下载新版安装入口，使用 `--script-only` 仅替换管理脚本；保留 Xray 核心、节点、证书、配置和运行状态，不重新安装或重启服务。
+
+```sh
+(
+  set -eu
+  f=$(mktemp)
+  trap 'rm -f "$f"' EXIT
+  curl -fL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 120 --progress-bar \
+    https://raw.githubusercontent.com/Haikure/xray-lite/main/install.sh -o "$f"
+  sh "$f" --script-only
+) && xl
+```
+
+此命令需要 `main` 上的安装入口支持 `--script-only`（0.1.3 起）。旧脚本保存在 `/opt/xray-lite/app.previous`；迁移失败会恢复旧脚本。若原安装使用自定义路径，运行前需导出原来的 `XL_HOME`、`XL_STATE`、`XL_RUN`、`XL_LINK`。迁移成功后，之后直接用菜单 **13** 即可更新。已经有完整新版源码时也可运行 `sh install.sh --script-only`。此模式要求已安装项目，不能与 `--offline`、`--no-start` 混用。
+
 ## 终端交互菜单
 
 提供类似参考项目的中文数字菜单，输入编号并回车操作：
 
 ```text
 ════════════════════════════════════════════════
-  xray-lite v0.1.1 · Xray-core：26.10.21
+  xray-lite v0.1.3 · Xray-core：26.10.21
   Haikure/xray-lite
   服务：运行中  节点：3  模式：systemd
 ════════════════════════════════════════════════
@@ -179,16 +194,16 @@ xl core update                        # 终端中选择版本并确认
 xl core update v版本号                 # 检查指定版本后确认
 xl core update latest --yes            # 自动化：明确同意安装最新版本
 xl rollback
-xl script update
-xl script update --ref main            # 显式使用 main 源码，跳过 Release API
+xl script update                       # 直接下载 main 源码，与菜单 13 相同
+xl script update --ref 分支或标签        # 可选：使用其他源码版本
 xl uninstall --yes
 ```
 
 所有修改共用 flock；代际目录保存配置、元数据和核心引用，通过单个 `current` 符号链接切换；配置检查失败不切换，启动/规则应用失败恢复上一份。`previous` 保存上次成功修改之前的状态。核心更新的查询与确认在持锁前完成，安装时基于最新磁盘配置检查。
 
-脚本更新默认使用 `Haikure/xray-lite` 的 Release，菜单 13 更新成功后重新载入新菜单。若没有可用 Release 或发布没有 `xray-lite.tar.gz`，则从默认分支源码归档更新。网络、API 或摘要错误会明确报错并保留当前脚本。需要直接使用源码时可运行 `xl script update --ref main`，也可指定 `xl script update owner/repo --ref 分支或标签`。
+脚本更新默认直接从 `Haikure/xray-lite` 的 `main` 分支下载源码，不查询 GitHub Release 或仓库信息 API，不需要发布 Release。菜单 13 更新成功后重新载入新菜单。也可指定 `xl script update owner/repo --ref 分支或标签`。下载失败明确报错并保留当前脚本。Xray 核心更新仍使用官方 Release，与管理脚本更新独立。
 
-Release 包需提供 GitHub SHA-256 digest，包根目录包含 `xl`、`lib/`、`install.sh`、`install-local.sh`、`VERSION`、`README.md`。两种来源都会检查归档安全、必需文件、脚本语法和版本文件；替换后再次自检，失败恢复 `app.previous`。一键安装使用仓库分支源码，无需先创建 Release。脚本包属于可执行代码，更新源应为自己信任的本项目仓库。
+源码归档必须包含 `xl`、`lib/`、`install.sh`、`install-local.sh`、`VERSION`、`README.md`。更新检查归档安全、必需文件、脚本语法和版本文件；替换后再次自检，失败恢复 `app.previous`。手动迁移入口共用脚本校验，也会备份旧脚本。脚本包属于可执行代码，更新源应为自己信任的本项目仓库。
 
 ## 功能差异与验收
 

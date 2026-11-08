@@ -10,13 +10,20 @@ xl_root
 if [[ ${1:-} == --deps ]]; then
     exec sh "$XL_APP/install.sh" --deps
 fi
-offline=0
-for argument in "$@"; do [[ $argument != --offline ]] || offline=1; done
-if (( offline == 0 )) && [[ ${XL_DEPS_READY:-0} != 1 ]]; then sh "$XL_APP/install.sh" --deps; fi
+offline=0 script_only=0
+for argument in "$@"; do
+    case $argument in --offline) offline=1;; --script-only) script_only=1;; esac
+done
+if (( script_only )); then
+    for argument in "$@"; do
+        case $argument in --script-only|--no-menu) ;; *) xl_die '--script-only 不能与核心安装参数一起使用。';; esac
+    done
+    [[ -f $XL_HOME/app/VERSION && -f $XL_HOME/.xray-lite-owned && -f $XL_STATE/current/config.json && -f $XL_STATE/.xray-lite-owned ]] || xl_die '未找到已有安装；首次安装请运行不带 --script-only 的安装命令。'
+elif (( offline == 0 )) && [[ ${XL_DEPS_READY:-0} != 1 ]]; then sh "$XL_APP/install.sh" --deps; fi
 xl_need bash jq curl openssl unzip sha256sum flock timeout tar
 xl_path_check
 xl_install_local() (
-xl_note '[3/5] 安装并检查管理脚本…'
+xl_note '安装并检查管理脚本…'
 xl_note "脚本目录：$XL_HOME/app；命令入口：$XL_LINK；数据目录：$XL_STATE"
 mkdir -p "$(dirname "$XL_LINK")"
 if [[ -e $XL_LINK && $(readlink -f "$XL_LINK") != "$XL_HOME/app/xl" ]]; then xl_die "快捷命令 $XL_LINK 已被其他程序占用。"; fi
@@ -30,11 +37,12 @@ xl_install_cleanup() {
     exit "$rc"
 }
 trap xl_install_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 mkdir "$stage/app"
 cp -a "$XL_APP/xl" "$XL_APP/install.sh" "$XL_APP/install-local.sh" "$XL_APP/lib" "$XL_APP/VERSION" "$XL_APP/README.md" "$stage/app/"
 chmod 755 "$stage/app/xl" "$stage/app/install.sh" "$stage/app/install-local.sh"
-sh -n "$stage/app/install.sh"
-for file in "$stage/app/xl" "$stage/app/install-local.sh" "$stage/app/"lib/*.sh; do bash -n "$file"; done
+version=$(xl_script_validate "$stage/app")
 if [[ -d $XL_HOME/app ]]; then
     [[ ! -e $XL_HOME/app.previous ]] || rm -rf -- "$XL_HOME/app.previous"
     mv "$XL_HOME/app" "$XL_HOME/app.previous"
@@ -44,8 +52,14 @@ app_replaced=1
 ln -sfn "$XL_HOME/app/xl" "$XL_LINK"
 export XL_HOME XL_STATE XL_RUN XL_LINK XL_SERVICE_MODE
 XL_APP="$XL_HOME/app"
-xl_bootstrap "$@"
+[[ $(bash "$XL_APP/xl" version) == "$version" ]] || xl_die '替换后的脚本自检失败。'
+if (( script_only == 0 )); then xl_bootstrap "$@"; fi
 completed=1
+if (( script_only )); then
+    xl_note "管理脚本已更新至 $version；上一份保存在 $XL_HOME/app.previous。"
+    xl_note "请退出旧菜单后重新运行 $XL_LINK，之后菜单 13 默认从 main 更新。"
+    exit 0
+fi
 xl_note '[5/5] 安装完成。'
 xl_service_status
 printf '配置：%s/current/config.json\n日志：%s/logs/core.log\n运行 %s 打开中文菜单。\n' "$XL_STATE" "$XL_STATE" "$XL_LINK"

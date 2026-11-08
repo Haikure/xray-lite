@@ -20,7 +20,7 @@ xl dns dns.json                        修改 Xray DNS（对象格式）
 xl core check                          检查当前及官方最新版本（含预发布）
 xl core update [latest|v版本] [--yes]   选择并确认核心版本；自动化需 --yes
 xl rollback                            恢复前一版本
-xl script update [owner/repo] [--ref 分支或标签]  更新脚本
+xl script update [owner/repo] [--ref 分支或标签]  从源码更新脚本，默认 main
 xl relay import ID outbound.json        导入 Xray 出口对象
 xl relay link ID link.txt               导入第三方分享链接
 xl relay token-export NODE passfile     输出项目加密 Token
